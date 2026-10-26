@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Giám sát tàu</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--tx:#1a1a1a;--mu:#666;--ok:#1a7f37;--bad:#c62828}
+@media(prefers-color-scheme:dark){:root{--bg:#15171a;--card:#22252a;--tx:#eee;--mu:#9aa5ad;--ok:#4cc26a;--bad:#ff6b6b}}
+body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+nav{display:flex;gap:6px;padding:10px}
+nav button{flex:1;padding:12px 4px;border:0;border-radius:8px;background:var(--card);color:var(--tx);font-size:15px}
+nav button.on{background:#1565c0;color:#fff}
+.card{background:var(--card);margin:10px;padding:14px;border-radius:12px}
+.big{font-size:56px;font-weight:700}
+.mu{color:var(--mu)}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.al{background:var(--bad);color:#fff;border-radius:8px;padding:6px 10px;margin:6px 6px 0 0;display:inline-block}
+#map{height:68vh;margin:10px;border-radius:12px;overflow:hidden}
+.fit{margin:0 10px;padding:8px 14px;border:0;border-radius:8px;background:var(--card);color:var(--tx)}
+</style></head><body>
+<nav><button id="b-captain">Trưởng tàu</button><button id="b-station">Trạm</button><button id="b-crew">Tiếp viên</button><button id="b-map">Bản đồ</button></nav>
+<div id="app"></div>
+<script>
+let view=location.hash.slice(1)||'captain',data=[],M=null,layer=null,fitted=false;
+const V=['captain','station','crew','map'],$=id=>document.getElementById(id);
+V.forEach(v=>$('b-'+v).onclick=()=>{view=v;location.hash=v;render()});
+const eta=s=>s==null?'--':s<60?s+' giây':Math.round(s/60)+' phút';
+const al=t=>(t.alerts||[]).map(a=>`<span class="al">${a}</span>`).join('');
+function spark(h){if(!h||h.length<2)return'';const m=Math.max(...h,10),w=300,k=50;
+ const p=h.map((v,i)=>`${i*w/(h.length-1)},${k-v/m*k}`).join(' ');
+ return `<svg viewBox="0 0 ${w} ${k}" width="100%" height="50"><polyline points="${p}" fill="none" stroke="#1565c0" stroke-width="2"/></svg>`}
+function render(){
+ V.forEach(v=>$('b-'+v).classList.toggle('on',v===view));
+ if(view==='map'){
+  if(!$('map')){$('app').innerHTML='<div id="map"></div><button class="fit" onclick="fitted=false;updateMap()">Căn lại bản đồ</button> <span id="mapnote" class="mu"></span>';M=null;fitted=false;updateMap()}
+  return}
+ if(M){M.remove();M=null}
+ if(!data.length){$('app').innerHTML='<div class="card mu">Chưa nhận được dữ liệu từ tàu…</div>';return}
+ $('app').innerHTML=data.map(t=>{
+  const st=t.online?'<span class="ok">● Trực tuyến</span>':'<span class="bad">● Mất kết nối</span>';
+  if(view==='captain')return `<div class="card"><b>${t.id}</b> ${st}<div class="big">${t.speed} <small>km/h</small></div><div class="mu">Gia tốc tổng ${t.mag} m/s² · GPS ${t.gps} (${t.sats} vệ tinh) · WiFi ${t.rssi} dBm</div>${spark(t.hist)}<div>${al(t)}</div></div>`;
+  if(view==='station')return `<div class="card"><b>${t.id}</b> ${st}<div>Ga gần nhất: <b>${t.station||'--'}</b> · cách ${t.dist!=null?t.dist+' m':'--'}</div><div class="big">${eta(t.eta)}</div><div class="mu">Tốc độ ${t.speed} km/h</div><div>${al(t)}</div></div>`;
+  const shake=(t.alerts||[]).some(a=>/Phanh|Rung/.test(a));
+  return `<div class="card"><b>Tàu ${t.id}</b><div class="big">${t.station||'--'}</div><div>Dự kiến tới ga gần nhất sau ${eta(t.eta)}</div>${shake?'<div class="al">Tàu đang rung lắc/phanh gấp, nhắc hành khách giữ chắc</div>':''}</div>`;
+ }).join('')}
+function drawFallback(d){   // khong co Internet: ve duong di don gian, khong co nen ban do
+ const pts=Object.values(d.tracks).flat();
+ if(!pts.length){$('map').innerHTML='<div class="card mu">Chưa có dữ liệu GPS…</div>';return}
+ const la=pts.map(p=>p[0]),lo=pts.map(p=>p[1]),a=Math.min(...la),b=Math.max(...la),c=Math.min(...lo),e=Math.max(...lo);
+ const W=600,H=400,k=Math.max(b-a,e-c,1e-5),X=x=>20+(x-c)/k*(W-40),Y=y=>H-20-(y-a)/k*(H-40);
+ const lines=Object.values(d.tracks).map(p=>`<polyline points="${p.map(q=>X(q[1])+','+Y(q[0])).join(' ')}" fill="none" stroke="#1565c0" stroke-width="3"/>`).join('');
+ $('map').innerHTML=`<div class="mu" style="padding:8px">Không tải được bản đồ nền (cần Internet) – hiển thị đường đi đơn giản</div><svg viewBox="0 0 ${W} ${H}" width="100%">${lines}</svg>`}
+async function updateMap(){
+ if(view!=='map'||!$('map'))return;
+ let d;try{d=await(await fetch('/api/track')).json()}catch(x){return}
+ if(!window.L){drawFallback(d);return}
+ if(!M){M=L.map('map',{minZoom:2,worldCopyJump:true}).setView([20,100],2);
+  let ok=false,world=false;
+  const addWorld=async()=>{if(world||!M)return;world=true;
+   try{const g=await(await fetch('/world.json')).json();
+    L.geoJSON(g,{style:{color:'#6b7a89',weight:1,fillColor:'#dde6ee',fillOpacity:1},interactive:false}).addTo(M).bringToBack();
+    const n=$('mapnote');if(n)n.textContent='Chế độ offline: bản đồ thế giới, chưa có nền đường phố (cần Internet)'}catch(x){}};
+  const tl=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap',referrerPolicy:'origin'}).addTo(M);
+  tl.on('tileload',()=>{ok=true});tl.on('tileerror',()=>{if(!ok)addWorld()});
+  setTimeout(()=>{if(!ok)addWorld()},4000);
+  layer=L.layerGroup().addTo(M);
+  d.stations.forEach(s=>L.circleMarker([s[1],s[2]],{radius:6,color:'#1a7f37',fillOpacity:1}).addTo(M).bindTooltip(s[0],{permanent:true,direction:'top'}))}
+ layer.clearLayers();let all=[];
+ for(const [id,p] of Object.entries(d.tracks)){
+  if(!p.length)continue;const ll=p.map(x=>[x[0],x[1]]);all=all.concat(ll);
+  L.polyline(ll,{color:'#1565c0',weight:4}).addTo(layer);
+  L.circleMarker(ll[ll.length-1],{radius:8,color:'#c62828',fillOpacity:1}).addTo(layer).bindTooltip(id+' · '+p[p.length-1][2]+' km/h')}
+ if(all.length&&!fitted){M.fitBounds(all,{padding:[30,30],maxZoom:17});fitted=true}}
+async function poll(){try{data=await(await fetch('/api/state')).json();render()}catch(e){}}
+setInterval(poll,1000);setInterval(updateMap,3000);poll();
+</script></body></html>
